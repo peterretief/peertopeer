@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/peterretief/peertopeer/internal/dstore"
 	"github.com/peterretief/peertopeer/internal/localstore"
 	"github.com/peterretief/peertopeer/internal/shardserver"
+	"github.com/peterretief/peertopeer/internal/tailnet"
 )
 
 func main() {
@@ -30,11 +34,16 @@ func run(args []string) error {
 		fs := flag.NewFlagSet("process", flag.ExitOnError)
 		origin := fs.String("origin", "outfiles", "directory containing files to shard")
 		shards := fs.String("shards", ".dstore-shards", "directory for local shard storage")
-		baseURL := fs.String("base-url", "", "public base URL used in emailed manifests, for example http://host:8080")
+		baseURL := fs.String("base-url", "", "base URL used in emailed manifests; defaults to this node's Tailscale IPv4 on port 8080")
+		port := fs.String("port", "8080", "port used when auto-detecting the Tailscale base URL")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		results, err := dstore.ProcessDirectory(dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: *baseURL})
+		resolvedBaseURL, err := resolveBaseURL(*baseURL, *port)
+		if err != nil {
+			return err
+		}
+		results, err := dstore.ProcessDirectory(dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL})
 		if err != nil {
 			return err
 		}
@@ -46,13 +55,18 @@ func run(args []string) error {
 		fs := flag.NewFlagSet("watch", flag.ExitOnError)
 		origin := fs.String("origin", "outfiles", "directory to watch for files to shard")
 		shards := fs.String("shards", ".dstore-shards", "directory for local shard storage")
-		baseURL := fs.String("base-url", "", "public base URL used in emailed manifests, for example http://host:8080")
+		baseURL := fs.String("base-url", "", "base URL used in emailed manifests; defaults to this node's Tailscale IPv4 on port 8080")
+		port := fs.String("port", "8080", "port used when auto-detecting the Tailscale base URL")
 		interval := fs.Duration("interval", 2*time.Second, "poll interval")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		fmt.Printf("watching %s; writing shards to %s\n", *origin, *shards)
-		return dstore.Watch(dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: *baseURL}, *interval, func(result dstore.ProcessResult) {
+		resolvedBaseURL, err := resolveBaseURL(*baseURL, *port)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("watching %s; writing shards to %s; manifest URLs use %s\n", *origin, *shards, resolvedBaseURL)
+		return dstore.Watch(dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL}, *interval, func(result dstore.ProcessResult) {
 			fmt.Printf("created %s from %s\n", result.StubPath, result.OriginalPath)
 		})
 	case "restore":
@@ -75,11 +89,11 @@ func run(args []string) error {
 	case "serve-shards":
 		fs := flag.NewFlagSet("serve-shards", flag.ExitOnError)
 		shards := fs.String("shards", ".dstore-shards", "directory containing local shards")
-		addr := fs.String("addr", "127.0.0.1:8080", "HTTP listen address")
+		addr := fs.String("addr", ":8080", "HTTP listen address")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		fmt.Printf("serving shards from %s at http://%s/shards/{hash}\n", *shards, *addr)
+		fmt.Printf("serving shards from %s at http://%s/shards/{hash}\n", *shards, displayAddr(*addr))
 		return http.ListenAndServe(*addr, shardserver.Handler(localstore.New(*shards)))
 	default:
 		usage()
@@ -87,10 +101,32 @@ func run(args []string) error {
 	}
 }
 
+func resolveBaseURL(baseURL, port string) (string, error) {
+	if strings.TrimSpace(baseURL) != "" {
+		return strings.TrimRight(baseURL, "/"), nil
+	}
+	resolved, err := tailnet.LocalBaseURL(context.Background(), port)
+	if err != nil {
+		return "", fmt.Errorf("auto-detect tailscale base URL: %w; pass -base-url explicitly if needed", err)
+	}
+	return resolved, nil
+}
+
+func displayAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  dstore process [-origin outfiles] [-shards .dstore-shards] [-base-url http://host:8080]")
-	fmt.Fprintln(os.Stderr, "  dstore watch   [-origin outfiles] [-shards .dstore-shards] [-base-url http://host:8080] [-interval 2s]")
+	fmt.Fprintln(os.Stderr, "  dstore process [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080]")
+	fmt.Fprintln(os.Stderr, "  dstore watch   [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-interval 2s]")
 	fmt.Fprintln(os.Stderr, "  dstore restore -stub outfiles/file.dstore [-shards .dstore-shards] [-output file]")
-	fmt.Fprintln(os.Stderr, "  dstore serve-shards [-shards .dstore-shards] [-addr 127.0.0.1:8080]")
+	fmt.Fprintln(os.Stderr, "  dstore serve-shards [-shards .dstore-shards] [-addr :8080]")
 }

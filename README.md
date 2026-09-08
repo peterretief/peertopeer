@@ -11,13 +11,13 @@ Important: the `.dstore` manifest contains the AES key. Anyone who receives the 
 Start a shard server:
 
 ```sh
-go run ./cmd/dstore serve-shards -shards .dstore-shards -addr 127.0.0.1:8080
+go run ./cmd/dstore serve-shards -shards .dstore-shards -addr :8080
 ```
 
 In another terminal, watch the `outfiles` folder:
 
 ```sh
-go run ./cmd/dstore watch -origin outfiles -shards .dstore-shards -base-url http://127.0.0.1:8080
+go run ./cmd/dstore watch -origin outfiles -shards .dstore-shards
 ```
 
 Drop a regular file into `outfiles`. The watcher will:
@@ -31,10 +31,10 @@ Drop a regular file into `outfiles`. The watcher will:
 You can email the `.dstore` file. It includes shard download URLs like:
 
 ```text
-http://127.0.0.1:8080/shards/{hash}
+http://100.x.y.z:8080/shards/{hash}
 ```
 
-For another machine to restore from an emailed manifest, use a `-base-url` that is reachable from that machine, such as a Tailscale/MagicDNS URL instead of `127.0.0.1`.
+By default, `process` and `watch` use `tailscale ip -4` to embed this node's Headscale/Tailscale IPv4 address in the manifest. Pass `-base-url` only when you want to override that URL, for example to use MagicDNS.
 
 Restore from a manifest:
 
@@ -49,7 +49,7 @@ The restore command downloads shards from the URLs in the manifest. It only need
 Instead of running the watcher, process the current files in `outfiles` once:
 
 ```sh
-go run ./cmd/dstore process -origin outfiles -shards .dstore-shards -base-url http://127.0.0.1:8080
+go run ./cmd/dstore process -origin outfiles -shards .dstore-shards
 ```
 
 ## Testing
