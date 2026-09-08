@@ -19,3 +19,13 @@ Design stage. The first implementation milestone should cover:
 - Central metadata or auth services.
 - Cloud object storage.
 - Advanced peer preference, repair, or health tracking.
+
+## Testing
+
+Run the current local scaffold with:
+
+```sh
+go test ./...
+```
+
+The test covers encrypting file bytes, splitting ciphertext into 4+2 Reed-Solomon shards, storing shards by content hash, loading a stub manifest, reconstructing from 4 shards, and decrypting back to the original bytes.
