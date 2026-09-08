@@ -1,0 +1,20 @@
+# Build outputs
+bin/
+build/
+dist/
+out/
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+tmp/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+coverage.out
