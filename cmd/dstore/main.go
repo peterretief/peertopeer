@@ -30,6 +30,35 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "agent":
+		fs := flag.NewFlagSet("agent", flag.ExitOnError)
+		origin := fs.String("origin", "outfiles", "directory to watch for files to shard")
+		shards := fs.String("shards", ".dstore-shards", "directory for local shard storage")
+		addr := fs.String("addr", ":8080", "HTTP shard server listen address")
+		baseURL := fs.String("base-url", "", "base URL used in emailed manifests; defaults to this node's Tailscale IPv4 on the server port")
+		interval := fs.Duration("interval", 2*time.Second, "watch poll interval")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		port, err := listenPort(*addr)
+		if err != nil {
+			return err
+		}
+		resolvedBaseURL, err := resolveBaseURL(*baseURL, port)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("serving shards from %s at http://%s/shards/{hash}\n", *shards, displayAddr(*addr))
+		fmt.Printf("watching %s; manifest URLs use %s\n", *origin, resolvedBaseURL)
+		go func() {
+			if err := http.ListenAndServe(*addr, shardserver.Handler(localstore.New(*shards))); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintln(os.Stderr, "dstore: shard server:", err)
+				os.Exit(1)
+			}
+		}()
+		return dstore.Watch(dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL}, *interval, func(result dstore.ProcessResult) {
+			fmt.Printf("created %s from %s\n", result.StubPath, result.OriginalPath)
+		})
 	case "process":
 		fs := flag.NewFlagSet("process", flag.ExitOnError)
 		origin := fs.String("origin", "outfiles", "directory containing files to shard")
@@ -112,6 +141,17 @@ func resolveBaseURL(baseURL, port string) (string, error) {
 	return resolved, nil
 }
 
+func listenPort(addr string) (string, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err == nil {
+		return port, nil
+	}
+	if strings.HasPrefix(addr, ":") && len(addr) > 1 {
+		return strings.TrimPrefix(addr, ":"), nil
+	}
+	return "", fmt.Errorf("listen address %q must include a port", addr)
+}
+
 func displayAddr(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -125,6 +165,7 @@ func displayAddr(addr string) string {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  dstore agent   [-origin outfiles] [-shards .dstore-shards] [-addr :8080] [-base-url http://tailscale-ip:8080]")
 	fmt.Fprintln(os.Stderr, "  dstore process [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080]")
 	fmt.Fprintln(os.Stderr, "  dstore watch   [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-interval 2s]")
 	fmt.Fprintln(os.Stderr, "  dstore restore -stub outfiles/file.dstore [-shards .dstore-shards] [-output file]")

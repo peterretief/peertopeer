@@ -1,0 +1,15 @@
+[Unit]
+Description=PeerToPeer DStore shard server and outfiles watcher
+Documentation=https://github.com/peterretief/peertopeer
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/media/peter/storage/PEER_TO_PEER
+ExecStart=/media/peter/storage/PEER_TO_PEER/bin/dstore agent -origin /media/peter/storage/PEER_TO_PEER/outfiles -shards /media/peter/storage/PEER_TO_PEER/.dstore-shards -addr :8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

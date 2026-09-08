@@ -59,3 +59,51 @@ go test ./...
 ```
 
 The tests cover local reconstruction and portable manifest restoration over HTTP without a local shard directory fallback.
+
+## Service Management
+
+Install the user-level systemd service:
+
+```sh
+./scripts/install-user-service.sh
+```
+
+The installer builds `bin/dstore`, writes `~/.config/systemd/user/peertopeer-dstore.service`, and reloads the user systemd manager. It does not start the service automatically.
+
+Start the combined shard server and `outfiles` watcher:
+
+```sh
+systemctl --user start peertopeer-dstore
+```
+
+Check status:
+
+```sh
+systemctl --user status peertopeer-dstore
+```
+
+Follow logs:
+
+```sh
+journalctl --user -u peertopeer-dstore -f
+```
+
+Stop the service:
+
+```sh
+systemctl --user stop peertopeer-dstore
+```
+
+Start it automatically when your user session starts:
+
+```sh
+systemctl --user enable peertopeer-dstore
+```
+
+The service runs:
+
+```sh
+bin/dstore agent -origin outfiles -shards .dstore-shards -addr :8080
+```
+
+That single process serves shard downloads and watches `outfiles` for new files.
