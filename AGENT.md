@@ -66,9 +66,7 @@ storage contributor at the same time, for different files.
 - Fresh random key + nonce generated per file at shard time
   (`crypto/rand`), never reused.
 - Encrypt BEFORE erasure coding, so every shard is ciphertext.
-- The key is never transmitted over the network and never sent to a
-  `chunkd` peer. It lives only in the manifest inside the local stub file
-  on the origin owner's machine.
+- The key is never sent to a `chunkd` peer. It lives inside the manifest stub; emailing the stub intentionally gives the recipient the restore capability.
 
 ### 2. Manifest
 
@@ -87,6 +85,7 @@ type Manifest struct {
 type ShardRef struct {
     Hash string // SHA-256 of the shard's ciphertext — this IS the shard's ID/filename on the peer
     Peer string // Tailscale IP or MagicDNS name currently holding it
+    URL  string // optional HTTP URL for restoring from an emailed manifest
 }
 ```
 
@@ -98,8 +97,7 @@ don't hash to `X` is itself the tamper/corruption signal, with no
 extra bookkeeping. It also gives free deduplication if two shards
 ever happen to be identical.
 
-The manifest is generated at shard time and never leaves the origin
-owner's machine except embedded in the stub file below.
+The manifest is generated at shard time and is embedded in the stub file below. It can be emailed as the restore token, but it contains the AES key, so anyone with the stub and access to at least 4 shard URLs can reconstruct the file.
 
 ### 3. Stub file (this IS the "link")
 
@@ -110,7 +108,8 @@ manifest (JSON or gob, doesn't matter — it's local only).
 Opening/double-clicking the stub triggers reconstruction:
 1. Read manifest locally — no network call needed to know where to look.
 2. Contact the 6 listed peers over the tailnet by IP/MagicDNS name,
-   requesting each shard by its content hash.
+   requesting each shard by its content hash or by the URL embedded in
+   the manifest.
 3. Pull whichever shards are reachable (need 4 of 6 minimum).
 4. Verify each returned shard's bytes hash to the requested hash before
    use — mismatch = reject and treat as unreachable.

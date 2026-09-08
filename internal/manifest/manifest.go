@@ -21,6 +21,7 @@ type Manifest struct {
 type ShardRef struct {
 	Hash string `json:"hash"`
 	Peer string `json:"peer"`
+	URL  string `json:"url,omitempty"`
 }
 
 func New(fileID, fileName string, ciphertextSize int, key, nonce []byte, shards [][]byte, peers []string) (Manifest, error) {

@@ -10,6 +10,8 @@ import (
 	"github.com/peterretief/peertopeer/internal/manifest"
 )
 
+var ErrInvalidHash = errors.New("invalid shard hash")
+
 type Store struct {
 	dir string
 }
@@ -60,10 +62,10 @@ func (s Store) Get(hash string) ([]byte, error) {
 
 func validateHash(hash string) error {
 	if len(hash) != 64 {
-		return fmt.Errorf("invalid hash length: %d", len(hash))
+		return fmt.Errorf("%w: length %d", ErrInvalidHash, len(hash))
 	}
 	if strings.ContainsAny(hash, `/\\`) {
-		return fmt.Errorf("invalid hash path segment: %q", hash)
+		return fmt.Errorf("%w: path segment %q", ErrInvalidHash, hash)
 	}
 	return nil
 }

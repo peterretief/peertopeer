@@ -18,3 +18,8 @@ tmp/
 
 # Go
 coverage.out
+
+# dstore local runtime
+.dstore-shards/
+outfiles/*
+!outfiles/.gitkeep
