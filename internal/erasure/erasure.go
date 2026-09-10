@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	DataShards   = 4
-	ParityShards = 2
+	DataShards   = 2
+	ParityShards = 1
 	TotalShards  = DataShards + ParityShards
 )
 

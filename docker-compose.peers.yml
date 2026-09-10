@@ -1,0 +1,86 @@
+name: peertopeer
+
+x-peer: &peer
+  image: dstore-peer:local
+  build:
+    context: .
+    dockerfile: docker/peer/Dockerfile
+    args:
+      TAILSCALE_IMAGE: ${TAILSCALE_IMAGE:-tailscale/tailscale:stable}
+  init: true
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  environment: &peer-environment
+    TS_AUTHKEY: ${HEADSCALE_AUTHKEY:-}
+    TS_AUTH_ONCE: "true"
+    TS_USERSPACE: "false"
+    TS_ACCEPT_DNS: "false"
+    TS_EXTRA_ARGS: --login-server=${HEADSCALE_URL:?Set HEADSCALE_URL in .env.peers}
+    TS_STATE_DIR: /var/lib/tailscale
+    TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    DSTORE_MEMBERS: ${DSTORE_MEMBERS:?Set DSTORE_MEMBERS in .env.peers}
+    DSTORE_SHARE_ID: ${DSTORE_SHARE_ID:-personal}
+    DSTORE_QUOTA_BYTES: ${DSTORE_QUOTA_BYTES:-1073741824}
+    DSTORE_MAX_FILE_BYTES: ${DSTORE_MAX_FILE_BYTES:-67108864}
+  restart: unless-stopped
+  stop_grace_period: 15s
+  mem_limit: 512m
+  pids_limit: 128
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test: ["CMD", "dstore-peer-health"]
+    interval: 15s
+    timeout: 10s
+    retries: 3
+    start_period: 180s
+
+services:
+  peer-a:
+    <<: *peer
+    hostname: ${PEER_PREFIX:-dstore-local}-a
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-local}-a
+    volumes:
+      - ./.docker/peers/peer-a/tailscale:/var/lib/tailscale
+      - ./.docker/peers/peer-a/dstore:/var/lib/dstore
+
+  peer-b:
+    <<: *peer
+    hostname: ${PEER_PREFIX:-dstore-local}-b
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-local}-b
+    volumes:
+      - ./.docker/peers/peer-b/tailscale:/var/lib/tailscale
+      - ./.docker/peers/peer-b/dstore:/var/lib/dstore
+
+  # Optional third destination for uploads from an external client.
+  peer-c:
+    <<: *peer
+    profiles: ["extra"]
+    hostname: ${PEER_PREFIX:-dstore-local}-c
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-local}-c
+    volumes:
+      - ./.docker/peers/peer-c/tailscale:/var/lib/tailscale
+      - ./.docker/peers/peer-c/dstore:/var/lib/dstore
+
+  peer-d:
+    <<: *peer
+    profiles: ["extra"]
+    hostname: ${PEER_PREFIX:-dstore-local}-d
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-local}-d
+    volumes:
+      - ./.docker/peers/peer-d/tailscale:/var/lib/tailscale
+      - ./.docker/peers/peer-d/dstore:/var/lib/dstore

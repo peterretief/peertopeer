@@ -67,7 +67,7 @@ func TestLocalEncryptShardStubAndReconstruct(t *testing.T) {
 	}
 
 	recoveredShards := make([][]byte, erasure.TotalShards)
-	for _, i := range []int{0, 2, 4, 5} {
+	for _, i := range []int{0, 2} {
 		shard, err := stores[i].Get(loaded.Shards[i].Hash)
 		if err != nil {
 			t.Fatal(err)

@@ -24,3 +24,7 @@ coverage.out
 outfiles/*
 !outfiles/.gitkeep
 /dstore
+
+# Docker peer state and contributed storage
+.docker/
+.env.peers
