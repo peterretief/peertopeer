@@ -5,9 +5,10 @@ Linux machine that already has a reachable Headscale server. The optional
 Compose profile `extra` adds `peer-c` and `peer-d`. The Headscale server itself
 remains unchanged; each service registers as a separate Tailscale node.
 
-The current erasure layout needs three ready storage peers for a file. The two
-default containers are a local starting point; enable the `extra` profile or
-add a remote dstore node before placing files from a peer origin.
+The desktop watcher currently uses five data shards plus two parity shards.
+The two default containers are storage contributors; the explicit desktop
+watcher supplies seven destinations. A standalone `dstore node` keeps the
+legacy 2+1 default; the desktop watcher is explicitly configured for 5+2.
 
 ## Before starting
 
@@ -80,7 +81,7 @@ enforces the sharing group, quota, and member identity list from
 discovers online compatible members. Set any of these in `.env.peers` if needed:
 
 ```dotenv
-DSTORE_MAX_FILE_BYTES=2147483648
+DSTORE_MAX_FILE_BYTES=4294967296
 DSTORE_INTERVAL=5s
 ```
 

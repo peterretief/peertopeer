@@ -1,0 +1,14 @@
+# Apply after docker-compose.peers.yml on the 1 GiB Headscale VM.
+# The image is built locally, versioned, and transferred with docker save/load.
+services:
+  peer-a:
+    image: ${DSTORE_PEER_IMAGE:?Set DSTORE_PEER_IMAGE to the deployed image tag}
+    mem_limit: 192m
+    mem_reservation: 96m
+    cpus: 0.5
+
+  peer-b:
+    image: ${DSTORE_PEER_IMAGE:?Set DSTORE_PEER_IMAGE to the deployed image tag}
+    mem_limit: 192m
+    mem_reservation: 96m
+    cpus: 0.5

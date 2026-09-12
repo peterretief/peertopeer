@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/peterretief/peertopeer/internal/dstore"
+	"github.com/peterretief/peertopeer/internal/erasure"
 	"github.com/peterretief/peertopeer/internal/localstore"
 	"github.com/peterretief/peertopeer/internal/manifest"
 	"github.com/peterretief/peertopeer/internal/peer"
@@ -60,10 +61,18 @@ func run(args []string) error {
 		interval := fs.Duration("interval", 2*time.Second, "watch poll interval")
 		peerPorts := fs.String("peer-ports", "", "comma-separated hostname:port pairs for peers (e.g. headscale-server:8081)")
 		peersFlag := fs.String("peers", "", "comma-separated shard peers as hostname=host[:port] (overrides Tailscale auto-selection)")
+		shareID := fs.String("share", "personal", "sharing group ID")
+		dataShards := fs.Int("data-shards", erasure.DataShards, "number of data shards")
+		parityShards := fs.Int("parity-shards", erasure.ParityShards, "number of parity shards")
 		excludePeersFlag := fs.String("exclude-peers", "", "comma-separated hostnames to exclude from auto peer selection")
 		maxFileBytes := fs.Int64("max-file-bytes", 0, "maximum input file size in bytes (default 64 MiB)")
+		chunkSize := fs.Int64("chunk-size", 16<<20, "plaintext chunk size in bytes (default 16 MiB)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		layout, err := erasure.NewLayout(*dataShards, *parityShards)
+		if err != nil {
+			return fmt.Errorf("invalid erasure layout: %w", err)
 		}
 		port, err := listenPort(*addr)
 		if err != nil {
@@ -86,7 +95,7 @@ func run(args []string) error {
 		excludeList := parseExcludeList(*excludePeersFlag)
 		fmt.Printf("serving shards from %s at http://%s/shards/{hash}\n", *shards, displayAddr(*addr))
 		fmt.Printf("watching %s; manifest URLs use %s\n", *origin, resolvedBaseURL)
-		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: port, PeerPorts: peerPortsMap, Peers: configuredPeers, ExcludePeers: excludeList, MaxFileBytes: *maxFileBytes}
+		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: port, PeerPorts: peerPortsMap, Peers: configuredPeers, ExcludePeers: excludeList, ShareID: *shareID, DataShards: layout.DataShards, ParityShards: layout.ParityShards, MaxFileBytes: *maxFileBytes, ChunkSize: *chunkSize}
 		return serveAndWatch(ctx, *addr, shardserver.HandlerWithIdentity(localstore.New(*shards), peer.WhoIs), cfg, *interval)
 	case "process":
 		fs := flag.NewFlagSet("process", flag.ExitOnError)
@@ -95,8 +104,17 @@ func run(args []string) error {
 		baseURL := fs.String("base-url", "", "base URL used in emailed manifests; defaults to this node's Tailscale IPv4 on port 8080")
 		port := fs.String("port", "8080", "port used when auto-detecting the Tailscale base URL")
 		peersFlag := fs.String("peers", "", "comma-separated shard peers as hostname=host[:port] (overrides Tailscale auto-selection)")
+		shareID := fs.String("share", "personal", "sharing group ID")
+		dataShards := fs.Int("data-shards", erasure.DataShards, "number of data shards")
+		parityShards := fs.Int("parity-shards", erasure.ParityShards, "number of parity shards")
+		maxFileBytes := fs.Int64("max-file-bytes", 0, "maximum input file size in bytes (default 64 MiB)")
+		chunkSize := fs.Int64("chunk-size", 16<<20, "plaintext chunk size in bytes (default 16 MiB)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		layout, err := erasure.NewLayout(*dataShards, *parityShards)
+		if err != nil {
+			return fmt.Errorf("invalid erasure layout: %w", err)
 		}
 		resolvedBaseURL, err := resolveBaseURL(*baseURL, *port)
 		if err != nil {
@@ -106,7 +124,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: *port, PeerPorts: peerPortsMap, Peers: configuredPeers}
+		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: *port, PeerPorts: peerPortsMap, Peers: configuredPeers, ShareID: *shareID, DataShards: layout.DataShards, ParityShards: layout.ParityShards, MaxFileBytes: *maxFileBytes, ChunkSize: *chunkSize}
 		results, err := dstore.ProcessDirectory(ctx, cfg)
 		if err != nil {
 			return err
@@ -122,9 +140,18 @@ func run(args []string) error {
 		baseURL := fs.String("base-url", "", "base URL used in emailed manifests; defaults to this node's Tailscale IPv4 on port 8080")
 		port := fs.String("port", "8080", "port used when auto-detecting the Tailscale base URL")
 		peersFlag := fs.String("peers", "", "comma-separated shard peers as hostname=host[:port] (overrides Tailscale auto-selection)")
+		shareID := fs.String("share", "personal", "sharing group ID")
+		dataShards := fs.Int("data-shards", erasure.DataShards, "number of data shards")
+		parityShards := fs.Int("parity-shards", erasure.ParityShards, "number of parity shards")
+		maxFileBytes := fs.Int64("max-file-bytes", 0, "maximum input file size in bytes (default 64 MiB)")
+		chunkSize := fs.Int64("chunk-size", 16<<20, "plaintext chunk size in bytes (default 16 MiB)")
 		interval := fs.Duration("interval", 2*time.Second, "poll interval")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		layout, err := erasure.NewLayout(*dataShards, *parityShards)
+		if err != nil {
+			return fmt.Errorf("invalid erasure layout: %w", err)
 		}
 		resolvedBaseURL, err := resolveBaseURL(*baseURL, *port)
 		if err != nil {
@@ -135,7 +162,7 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Printf("watching %s; writing shards to %s; manifest URLs use %s\n", *origin, *shards, resolvedBaseURL)
-		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: *port, PeerPorts: peerPortsMap, Peers: configuredPeers}
+		cfg := dstore.Config{OriginDir: *origin, ShardDir: *shards, BaseURL: resolvedBaseURL, ListenPort: *port, PeerPorts: peerPortsMap, Peers: configuredPeers, ShareID: *shareID, DataShards: layout.DataShards, ParityShards: layout.ParityShards, MaxFileBytes: *maxFileBytes, ChunkSize: *chunkSize}
 		return dstore.Watch(ctx, cfg, *interval, func(result dstore.ProcessResult) {
 			fmt.Printf("created %s from %s\n", result.StubPath, result.OriginalPath)
 		})
@@ -354,9 +381,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  dstore add -config node.json /path/to/file-or-directory [...]")
 	fmt.Fprintln(os.Stderr, "  dstore restore-tree -source library/folder -output restored-folder [-shards .dstore-shards]")
 	fmt.Fprintln(os.Stderr, "  dstore peers   [-online-only]")
-	fmt.Fprintln(os.Stderr, "  dstore agent   [-origin outfiles] [-shards .dstore-shards] [-addr :8080] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]] [-exclude-peers Tim_Laptop,Redmi A5] [-peer-ports node:8081]")
-	fmt.Fprintln(os.Stderr, "  dstore process [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]]")
-	fmt.Fprintln(os.Stderr, "  dstore watch   [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]] [-interval 2s]")
+	fmt.Fprintln(os.Stderr, "  dstore agent   [-origin outfiles] [-shards .dstore-shards] [-addr :8080] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]] [-data-shards 2] [-parity-shards 1] [-exclude-peers Tim_Laptop,Redmi A5] [-peer-ports node:8081]")
+	fmt.Fprintln(os.Stderr, "  dstore process [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]] [-data-shards 2] [-parity-shards 1]")
+	fmt.Fprintln(os.Stderr, "  dstore watch   [-origin outfiles] [-shards .dstore-shards] [-base-url http://tailscale-ip:8080] [-peers node=100.x.y.z[:8080]] [-data-shards 2] [-parity-shards 1] [-interval 2s]")
 	fmt.Fprintln(os.Stderr, "  dstore restore -stub outfiles/file.dstore [-shards .dstore-shards] [-output file] [-output-dir ./restored]")
 	fmt.Fprintln(os.Stderr, "  dstore serve-shards [-shards .dstore-shards] [-addr :8080]")
 }

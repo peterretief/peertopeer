@@ -285,3 +285,45 @@ func TestProcessFileWithConfiguredPeerFailureKeepsOriginal(t *testing.T) {
 		t.Fatalf("stub should not be written after failed remote push, stat err=%v", err)
 	}
 }
+
+func TestProcessFileUsesBoundedChunkedManifest(t *testing.T) {
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin")
+	shards := filepath.Join(root, "shards")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(shardserver.Handler(localstore.New(filepath.Join(root, "remote"))))
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(origin, "chunked.bin")
+	plaintext := bytes.Repeat([]byte("bounded memory test\n"), 700)
+	if err := os.WriteFile(original, plaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := dstore.ProcessFileWithConfig(context.Background(), original, dstore.Config{
+		ShardDir: shards, BaseURL: server.URL, ListenPort: "1", ChunkSize: 1024,
+		PeerPorts: map[string]string{"peer": serverURL.Port()},
+		Peers:     []peer.Peer{{HostName: "peer", TailIP: serverURL.Hostname(), Online: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Manifest.Version != 2 || len(result.Manifest.Chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got version=%d chunks=%d", result.Manifest.Version, len(result.Manifest.Chunks))
+	}
+	restored, err := dstore.RestoreFile(context.Background(), result.StubPath, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatal("chunked restore mismatch")
+	}
+}

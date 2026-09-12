@@ -28,6 +28,7 @@ type Config struct {
 	LibraryDir    string   `json:"library_dir"`
 	QuotaBytes    int64    `json:"quota_bytes"`
 	MaxFileBytes  int64    `json:"max_file_bytes"`
+	ChunkSize     int64    `json:"chunk_size,omitempty"`
 	MaxShardBytes int64    `json:"max_shard_bytes"`
 	Peers         string   `json:"peers,omitempty"`
 	PeerPorts     string   `json:"peer_ports,omitempty"`
@@ -36,7 +37,7 @@ type Config struct {
 func Default(name string) Config {
 	return Config{Version: 1, Name: name, ShareID: "personal", Role: "storage", Port: "8080",
 		Members: []string{}, OriginDir: "outfiles", ShardDir: ".dstore-shards", LibraryDir: "library",
-		QuotaBytes: 10 << 30, MaxFileBytes: 64 << 20, MaxShardBytes: protocol.DefaultMaxShardBytes}
+		QuotaBytes: 10 << 30, MaxFileBytes: 64 << 20, ChunkSize: 16 << 20, MaxShardBytes: protocol.DefaultMaxShardBytes}
 }
 
 func (c Config) Validate() error {
@@ -53,8 +54,8 @@ func (c Config) Validate() error {
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
-	if c.QuotaBytes <= 0 || c.MaxFileBytes <= 0 || c.MaxShardBytes <= 0 || c.MaxFileBytes > 1<<30 || c.MaxShardBytes > 1<<30 {
-		return fmt.Errorf("quota must be positive; file and shard limits must be between 1 byte and 1 GiB")
+	if c.QuotaBytes <= 0 || c.MaxFileBytes <= 0 || c.MaxShardBytes <= 0 || c.MaxFileBytes > 1<<40 || c.MaxShardBytes > 1<<30 || c.ChunkSize < 0 || c.ChunkSize > 1<<30 {
+		return fmt.Errorf("quota must be positive; file limit must be between 1 byte and 1 TiB, shard limit between 1 byte and 1 GiB")
 	}
 	if !c.AllowMesh && len(c.Members) == 0 {
 		return fmt.Errorf("list at least one member, or explicitly enable allow_mesh")

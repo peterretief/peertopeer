@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/media/peter/storage/PEER_TO_PEER
-ExecStart=/media/peter/storage/PEER_TO_PEER/bin/dstore agent -origin /media/peter/storage/PEER_TO_PEER/outfiles -shards /media/peter/storage/PEER_TO_PEER/.dstore-shards -addr :8080 -peers headscale-server=100.64.0.9:8081,localmail=100.64.0.2:8090,localbox-002=100.64.0.4:19084 -exclude-peers Tim_Laptop,Redmi A5 -max-file-bytes 2147483648
+ExecStart=/media/peter/storage/PEER_TO_PEER/bin/dstore agent -origin /media/peter/storage/PEER_TO_PEER/outfiles -shards /media/peter/storage/PEER_TO_PEER/.dstore-shards -addr :8080 -peers "dstore-local-a=100.64.0.10:8080,dstore-local-b=100.64.0.11:8080,dstore-headscale-a=100.64.0.12:8080,dstore-headscale-b=100.64.0.13:8080,dstore-localmail-a=100.64.0.15:8080,dstore-localmail-b=100.64.0.16:8080,dstore-localmail-c=100.64.0.14:8080" -exclude-peers "" -share personal -data-shards 5 -parity-shards 2 -max-file-bytes 268435456 -chunk-size 16777216
 Restart=on-failure
 RestartSec=5
 

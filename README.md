@@ -2,9 +2,9 @@
 
 Peer-to-peer file storage for an existing Headscale/Tailscale mesh.
 
-The design is documented in [AGENT.md](AGENT.md). The system encrypts a file, splits the ciphertext into 4 data shards plus 2 parity shards, distributes those shards across online peers, and writes a portable `.dstore` manifest that can restore the original file.
+The design is documented in [AGENT.md](AGENT.md). The deployed desktop watcher encrypts files, splits each chunk into 5 data shards plus 2 parity shards, distributes those shards across online peers, and writes a portable `.dstore` manifest that can restore the original file. New files are processed in bounded 16 MiB chunks so memory use does not grow with the file size; standalone commands retain the legacy 2+1 defaults unless their layout flags are set.
 
-Important: the `.dstore` manifest contains the AES key. Anyone who receives the manifest and can reach at least 4 shard URLs can recreate the original file.
+Important: the `.dstore` manifest contains the AES key. Anyone who receives the manifest and can reach at least 5 shard URLs for every version-2 chunk can recreate the original file.
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ The peer format is `hostname=host[:port]`. If fewer peers are listed than shard 
 Drop a file or directory into `outfiles/`. The agent will process regular files recursively and leave `.dstore` manifests beside each original path:
 
 1. Encrypt it with AES-256-GCM
-2. Split into 6 Reed-Solomon shards
+2. Split each encrypted chunk into 7 Reed-Solomon shards (5 data + 2 parity)
 3. Randomly select online peers from your Tailscale mesh, or use the explicit `-peers` list
 4. Push each shard to a peer via HTTP PUT
 5. Store a local copy as well
@@ -86,11 +86,11 @@ xdg-open outfiles/example.txt.dstore
 bin/dstore restore -stub outfiles/example.txt.dstore
 ```
 
-Restore fetches shards from the URLs in the manifest. Only 4 of 6 shards need to be reachable. If a peer is offline, the remaining shards are sufficient.
+Restore fetches shards from the URLs in the manifest. Only 5 of 7 shards per chunk need to be reachable. If a peer is offline, the remaining shards are sufficient.
 
 ### Sharing a file
 
-Email the `.dstore` file to another mesh member. They can restore it on any peer that can reach at least 4 of the 6 shard URLs.
+Email the `.dstore` file to another mesh member. They can restore it on any peer that can reach at least 5 of the 7 shard URLs for every chunk.
 
 ## Commands
 
@@ -131,6 +131,10 @@ bin/dstore agent \
 | `-interval` | `2s` | Watch poll interval |
 | `-peers` | auto | Comma-separated explicit shard nodes as `hostname=host[:port]`; overrides random peer selection |
 | `-peer-ports` | none | Comma-separated `hostname:port` overrides for auto-selected peers |
+| `-data-shards` | `2` | Number of data shards (the active service passes `5`) |
+| `-parity-shards` | `1` | Number of parity shards (the active service passes `2`) |
+| `-chunk-size` | `16 MiB` | Plaintext bytes processed at a time |
+| `-max-file-bytes` | `64 MiB` | Maximum input file size for this command |
 
 ### restore
 

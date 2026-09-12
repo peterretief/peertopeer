@@ -37,11 +37,14 @@ type Config struct {
 	Peers               []peer.Peer
 	ExcludePeers        []string
 	ShareID             string
+	DataShards          int
+	ParityShards        int
 	Members             []string
 	MinPeers            int
 	RequireCapabilities bool
 	KeepOriginal        bool
 	MaxFileBytes        int64
+	ChunkSize           int64
 	QuotaBytes          int64
 	Store               *localstore.Store
 	Discover            func(context.Context) ([]peer.Peer, error)
@@ -117,6 +120,10 @@ func ProcessFileWithConfig(ctx context.Context, path string, cfg Config) (Proces
 	return processFile(ctx, path, path+StubExtension, cfg)
 }
 
+func layoutForConfig(cfg Config) (erasure.Layout, error) {
+	return erasure.NewLayout(cfg.DataShards, cfg.ParityShards)
+}
+
 func processFile(ctx context.Context, path, stubPath string, cfg Config) (ProcessResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ProcessResult{}, err
@@ -126,6 +133,10 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 	}
 	if cfg.ShardDir == "" {
 		return ProcessResult{}, errors.New("shard directory is required")
+	}
+	layout, err := layoutForConfig(cfg)
+	if err != nil {
+		return ProcessResult{}, fmt.Errorf("invalid erasure layout: %w", err)
 	}
 
 	if _, err := os.Lstat(stubPath); err == nil {
@@ -145,9 +156,20 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 	if limit <= 0 {
 		limit = 64 << 20
 	}
+	if limit > 1<<40 {
+		return ProcessResult{}, fmt.Errorf("file limit is too large: %d", limit)
+	}
 	if info.Size() > limit {
 		return ProcessResult{}, fmt.Errorf("file exceeds %d-byte limit", limit)
 	}
+	chunkSize := cfg.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 16 << 20
+	}
+	if chunkSize > int64(^uint(0)>>1) || chunkSize > 1<<30 {
+		return ProcessResult{}, fmt.Errorf("chunk size is too large: %d", chunkSize)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return ProcessResult{}, err
@@ -160,62 +182,97 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 	if !os.SameFile(info, opened) {
 		return ProcessResult{}, fmt.Errorf("source changed before reading")
 	}
-	plaintext, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return ProcessResult{}, fmt.Errorf("read original: %w", err)
-	}
-	if int64(len(plaintext)) > limit {
-		return ProcessResult{}, fmt.Errorf("file exceeds %d-byte limit", limit)
-	}
-	ciphertext, key, nonce, err := cryptofile.Encrypt(plaintext)
-	if err != nil {
-		return ProcessResult{}, err
-	}
-	shards, err := erasure.Encode(ciphertext)
-	if err != nil {
-		return ProcessResult{}, err
-	}
 
-	configuredPeers := len(cfg.Peers) > 0
-	peerList, peerErr := shardPeers(ctx, cfg, erasure.TotalShards, int64(len(shards[0])))
-	if peerErr != nil {
-		return ProcessResult{}, fmt.Errorf("cannot place shards: %w", peerErr)
+	key := make([]byte, cryptofile.KeySize)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return ProcessResult{}, fmt.Errorf("generate key: %w", err)
 	}
-
 	port := cfg.ListenPort
 	if port == "" {
 		port = "8080"
 	}
-
+	configuredPeers := len(cfg.Peers) > 0
+	capChunkSize := chunkSize
+	if info.Size() < capChunkSize {
+		capChunkSize = info.Size()
+	}
+	maxShardBytes := int64((capChunkSize + 16 + int64(layout.DataShards) - 1) / int64(layout.DataShards))
+	peerList, err := shardPeers(ctx, cfg, layout.TotalShards(), maxShardBytes)
+	if err != nil {
+		return ProcessResult{}, fmt.Errorf("cannot place shards: %w", err)
+	}
 	store := localstore.WithQuota(cfg.ShardDir, cfg.QuotaBytes)
 	if cfg.Store != nil {
 		store = *cfg.Store
 	}
-	peerURLs := make([]string, erasure.TotalShards)
-	peerNames := make([]string, erasure.TotalShards)
-	for i, shard := range shards {
-		peerNames[i] = "local"
-
-		if peerErr == nil && i < len(peerList) {
-			p := peerList[i]
-			peerNames[i] = p.HostName
-			peerPort := port
-			if cfg.PeerPorts != nil {
-				if custom, ok := cfg.PeerPorts[p.HostName]; ok {
-					peerPort = custom
-				}
-			}
-			peerURLs[i] = shardURL(p, peerPort, manifest.Hash(shard))
-			if err := pushShard(ctx, p, shard, peerPort, cfg.ShareID); err != nil {
-				if configuredPeers {
-					return ProcessResult{}, fmt.Errorf("configured peer %s unavailable for shard %d: %w", p.HostName, i, err)
-				}
-				return ProcessResult{}, fmt.Errorf("peer %s unavailable for shard %d: %w", p.HostName, i, err)
-			}
+	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	reader := io.LimitReader(f, limit+1)
+	buffer := make([]byte, int(chunkSize))
+	chunks := make([]manifest.Chunk, 0, int((info.Size()+chunkSize-1)/chunkSize))
+	var plaintextTotal int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return ProcessResult{}, err
 		}
-
-		if _, err := store.Put(shard); err != nil {
-			return ProcessResult{}, fmt.Errorf("store shard %d: %w", i, err)
+		n, readErr := io.ReadFull(reader, buffer)
+		if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+			return ProcessResult{}, fmt.Errorf("read original: %w", readErr)
+		}
+		if n > 0 || plaintextTotal == 0 {
+			plaintextTotal += int64(n)
+			if plaintextTotal > limit {
+				return ProcessResult{}, fmt.Errorf("file exceeds %d-byte limit", limit)
+			}
+			ciphertext, nonce, err := cryptofile.EncryptChunk(buffer[:n], key)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			shards, err := layout.Encode(ciphertext)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			refs := make([]manifest.ShardRef, layout.TotalShards())
+			for i, shard := range shards {
+				peerName := "local"
+				var shardURLValue string
+				if i < len(peerList) {
+					p := peerList[i]
+					peerName = p.HostName
+					peerPort := port
+					if cfg.PeerPorts != nil {
+						if custom, ok := cfg.PeerPorts[p.HostName]; ok {
+							peerPort = custom
+						}
+					}
+					shardURLValue = shardURL(p, peerPort, manifest.Hash(shard))
+					if err := pushShard(ctx, p, shard, peerPort, cfg.ShareID); err != nil {
+						if configuredPeers {
+							return ProcessResult{}, fmt.Errorf("configured peer %s unavailable for shard %d: %w", p.HostName, i, err)
+						}
+						return ProcessResult{}, fmt.Errorf("peer %s unavailable for shard %d: %w", p.HostName, i, err)
+					}
+				}
+				if _, err := store.Put(shard); err != nil {
+					return ProcessResult{}, fmt.Errorf("store shard %d: %w", i, err)
+				}
+				ref := manifest.ShardRef{Hash: manifest.Hash(shard), Peer: peerName}
+				if shardURLValue != "" {
+					ref.URL = shardURLValue
+				} else if baseURL != "" {
+					ref.URL = baseURL + "/shards/" + ref.Hash
+				} else {
+					ref.URL = "local"
+				}
+				refs[i] = ref
+				// The shard has been uploaded and persisted; release its chunk buffer
+				// before moving to the next shard.
+				shards[i] = nil
+			}
+			chunks = append(chunks, manifest.Chunk{PlaintextSize: n, CiphertextSize: len(ciphertext), Nonce: nonce, Shards: refs})
+			ciphertext = nil
+		}
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+			break
 		}
 	}
 
@@ -223,23 +280,11 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 	if err != nil {
 		return ProcessResult{}, err
 	}
-	m, err := manifest.New(fileID, filepath.Base(path), len(ciphertext), key, nonce, shards, peerNames)
+	m, err := manifest.NewChunked(layout, fileID, filepath.Base(path), int(plaintextTotal), int(chunkSize), key, chunks)
 	if err != nil {
 		return ProcessResult{}, err
 	}
-
-	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	m.ShareID = cfg.ShareID
-	for i := range m.Shards {
-		if peerURLs[i] != "" {
-			m.Shards[i].URL = peerURLs[i]
-		} else if baseURL != "" {
-			m.Shards[i].URL = baseURL + "/shards/" + m.Shards[i].Hash
-		} else {
-			m.Shards[i].URL = "local"
-		}
-	}
-
 	stubBytes, err := manifest.Marshal(m)
 	if err != nil {
 		return ProcessResult{}, err
@@ -249,7 +294,7 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 	if err != nil {
 		return ProcessResult{}, err
 	}
-	if !os.SameFile(info, current) || current.Size() != info.Size() || !current.ModTime().Equal(info.ModTime()) || int64(len(plaintext)) != info.Size() {
+	if !os.SameFile(info, current) || current.Size() != info.Size() || !current.ModTime().Equal(info.ModTime()) || plaintextTotal != info.Size() {
 		return ProcessResult{}, fmt.Errorf("source changed during upload; original retained")
 	}
 	if err := ctx.Err(); err != nil {
@@ -264,7 +309,14 @@ func processFile(ctx context.Context, path, stubPath string, cfg Config) (Proces
 		}
 	}
 
-	return ProcessResult{OriginalPath: path, StubPath: stubPath, Manifest: m}, nil
+	resultManifest := m
+	// Keep the first chunk's placement available to callers of ProcessResult for
+	// compatibility with the pre-chunked API. The on-disk manifest stores refs
+	// per chunk and does not duplicate this field.
+	if len(chunks) > 0 {
+		resultManifest.Shards = append([]manifest.ShardRef(nil), chunks[0].Shards...)
+	}
+	return ProcessResult{OriginalPath: path, StubPath: stubPath, Manifest: resultManifest}, nil
 }
 
 func pushShard(ctx context.Context, p peer.Peer, shard []byte, port, shareID string) error {
@@ -390,25 +442,33 @@ func RestoreFile(ctx context.Context, stubPath, shardDir, outputPath string) (st
 			outputPath = filepath.Join(filepath.Dir(stubPath), m.FileName)
 		}
 	}
+	if m.Version == 2 {
+		return restoreChunked(ctx, m, shardDir, outputPath)
+	}
 
+	layout, err := erasure.NewLayout(m.DataShards, m.ParityShards)
+	if err != nil {
+		return "", fmt.Errorf("invalid manifest erasure layout: %w", err)
+	}
 	var store localstore.Store
 	if shardDir != "" {
 		store = localstore.New(shardDir)
 	}
 	client := shardClient()
-	shards := make([][]byte, erasure.TotalShards)
+	shards := make([][]byte, layout.TotalShards())
+	maxShardBytes := int64((m.CiphertextSize + layout.DataShards - 1) / layout.DataShards)
 	for i, ref := range m.Shards {
 		if ref.Hash == "" {
 			continue
 		}
-		shard, err := fetchShard(ctx, client, store, shardDir != "", ref, m.ShareID, int64((m.CiphertextSize+erasure.DataShards-1)/erasure.DataShards))
+		shard, err := fetchShard(ctx, client, store, shardDir != "", ref, m.ShareID, maxShardBytes)
 		if err != nil {
 			continue
 		}
 		shards[i] = shard
 	}
 
-	ciphertext, err := erasure.Decode(shards, m.CiphertextSize)
+	ciphertext, err := layout.Decode(shards, m.CiphertextSize)
 	if err != nil {
 		return "", err
 	}
@@ -417,6 +477,57 @@ func RestoreFile(ctx context.Context, stubPath, shardDir, outputPath string) (st
 		return "", err
 	}
 	if err := atomicfile.WriteNew(outputPath, plaintext, 0o600); err != nil {
+		return "", fmt.Errorf("write restored file: %w", err)
+	}
+	return outputPath, nil
+}
+
+func restoreChunked(ctx context.Context, m manifest.Manifest, shardDir, outputPath string) (string, error) {
+	layout, err := erasure.NewLayout(m.DataShards, m.ParityShards)
+	if err != nil {
+		return "", fmt.Errorf("invalid manifest erasure layout: %w", err)
+	}
+	var store localstore.Store
+	if shardDir != "" {
+		store = localstore.New(shardDir)
+	}
+	client := shardClient()
+	err = atomicfile.WriteNewFrom(outputPath, 0o600, func(w io.Writer) error {
+		for chunkIndex, chunk := range m.Chunks {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			shards := make([][]byte, layout.TotalShards())
+			maxShardBytes := int64((chunk.CiphertextSize + layout.DataShards - 1) / layout.DataShards)
+			for i, ref := range chunk.Shards {
+				if ref.Hash == "" {
+					continue
+				}
+				shard, err := fetchShard(ctx, client, store, shardDir != "", ref, m.ShareID, maxShardBytes)
+				if err != nil {
+					continue
+				}
+				shards[i] = shard
+			}
+			ciphertext, err := layout.Decode(shards, chunk.CiphertextSize)
+			shards = nil
+			if err != nil {
+				return fmt.Errorf("decode chunk %d: %w", chunkIndex, err)
+			}
+			plaintext, err := cryptofile.Decrypt(ciphertext, m.Key, chunk.Nonce)
+			if err != nil {
+				return fmt.Errorf("decrypt chunk %d: %w", chunkIndex, err)
+			}
+			if len(plaintext) != chunk.PlaintextSize {
+				return fmt.Errorf("chunk %d plaintext size mismatch: got %d want %d", chunkIndex, len(plaintext), chunk.PlaintextSize)
+			}
+			if _, err := w.Write(plaintext); err != nil {
+				return fmt.Errorf("write chunk %d: %w", chunkIndex, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return "", fmt.Errorf("write restored file: %w", err)
 	}
 	return outputPath, nil

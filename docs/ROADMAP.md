@@ -7,8 +7,9 @@ portable manifests. Start with Linux nodes on the existing Headscale/Tailscale
 mesh. A device joins the VPN separately from opting into storage sharing.
 Internet connectivity alone does not make a device a storage peer.
 
-The current encoding is 2 data shards plus 1 parity shard. Three distinct storage
-devices are required to tolerate one device going offline. Placing multiple
+The deployed encoding is 5 data shards plus 2 parity shards. Seven shard
+placements are used, and five shards per chunk are sufficient for restore. Older
+2+1 manifests remain readable. Placing multiple
 shards on one device reduces device-failure protection.
 
 ## Milestone 1: Linux Participation
@@ -31,7 +32,6 @@ members, corrupt uploads, quota exhaustion, and unavailable peers fail visibly.
 ## Milestone 2: Durability and Recovery
 
 - Durable job journal and resumable uploads with exponential retry/backoff.
-- Chunked encryption/streaming for large files; bound total memory, not just input.
 - Manifest inventory and availability checks, followed by owner-authorized repair.
 - Keep sufficient independent copies before retiring a device or deleting data.
 - Encrypted manifest backups and key recovery. Losing the only manifest loses
@@ -74,7 +74,7 @@ One sharing group per agent. Membership is configured locally and must agree on
 each device. Quotas apply to ciphertext bytes, not filesystem overhead. There is
 no automatic repair, garbage collection, resumable transfer, multi-user UI,
 public internet enrollment, or automatic deployment to other people's machines.
-Files are processed in memory with an explicit size limit. Failed batches may
+New files are processed in bounded chunks with an explicit size limit. Failed batches may
 leave successfully uploaded encrypted shards; do not garbage-collect them by age.
 
 ## Upstream References

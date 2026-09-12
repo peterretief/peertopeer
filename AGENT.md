@@ -20,7 +20,7 @@ from whichever peers are reachable.
 2. **Security** — shards must be meaningless to anyone who doesn't hold the
    file's key. Peers should not be able to read, tamper with, or grief each
    other's data.
-3. **Resilience** — tolerate up to 2 of 6 shard-holding peers being offline
+3. **Resilience** — tolerate up to 2 of 7 shard-holding peers being offline
    or unreachable at reconstruction time.
 
 Explicitly NOT goals for this version:
@@ -46,8 +46,8 @@ storage contributor at the same time, for different files.
 
 ## Existing Components to Reuse (do not rewrite)
 
-- `internal/erasure` — erasure coding (4 data + 2 parity shards, 6 total,
-  `klauspost/reedsolomon`). 12 passing tests. Tolerates 2 of 6 shard losses.
+- `internal/erasure` — erasure coding (configurable layout; the deployed layout is
+  5 data + 2 parity shards, 7 total, with older 2+1 manifests supported).
   Fixed bug: `erasure.Decode` no longer pre-fills nil shards (handled
   natively by `Reconstruct`).
 - `internal/metadata` — existing DB operations, reusable for local-only
@@ -63,10 +63,10 @@ storage contributor at the same time, for different files.
 ### 1. Encryption (mandatory, non-negotiable)
 
 - AES-256-GCM.
-- Fresh random key + nonce generated per file at shard time
+- Fresh random key generated per file and fresh random nonce per encrypted chunk at shard time
   (`crypto/rand`), never reused.
 - Encrypt BEFORE erasure coding, so every shard is ciphertext.
-- The key is never sent to a `chunkd` peer. It lives inside the manifest stub; emailing the stub intentionally gives the recipient the restore capability.
+- The key is never sent to a `chunkd` peer. It lives inside the manifest stub; emailing the stub intentionally gives the recipient the restore capability. Version-2 manifests keep nonce and shard references per chunk.
 
 ### 2. Manifest
 
@@ -75,11 +75,17 @@ reconstruct a file. Fields:
 
 ```go
 type Manifest struct {
-    FileID   string    // unique id for this file's shard set
-    FileName string    // original filename
-    Key      []byte    // AES-256 key
-    Nonce    []byte    // GCM nonce
-    Shards   [6]ShardRef
+    Version        int
+    DataShards     int
+    ParityShards   int
+    FileID         string
+    FileName       string
+    PlaintextSize  int
+    ChunkSize      int
+    Key            []byte
+    Nonce          []byte    // version-1 whole-file manifests
+    Shards         []ShardRef // version-1 whole-file manifests
+    Chunks         []Chunk    // version-2 chunked manifests
 }
 
 type ShardRef struct {
@@ -97,7 +103,7 @@ don't hash to `X` is itself the tamper/corruption signal, with no
 extra bookkeeping. It also gives free deduplication if two shards
 ever happen to be identical.
 
-The manifest is generated at shard time and is embedded in the stub file below. It can be emailed as the restore token, but it contains the AES key, so anyone with the stub and access to at least 4 shard URLs can reconstruct the file.
+The manifest is generated at shard time and is embedded in the stub file below. It can be emailed as the restore token, but it contains the AES key, so anyone with the stub and access to at least 5 shard URLs for every version-2 chunk can reconstruct the file.
 
 ### 3. Stub file (this IS the "link")
 
@@ -107,14 +113,14 @@ manifest (JSON or gob, doesn't matter — it's local only).
 
 Opening/double-clicking the stub triggers reconstruction:
 1. Read manifest locally — no network call needed to know where to look.
-2. Contact the 6 listed peers over the tailnet by IP/MagicDNS name,
+2. Contact the listed peers over the tailnet by IP/MagicDNS name,
    requesting each shard by its content hash or by the URL embedded in
    the manifest.
-3. Pull whichever shards are reachable (need 4 of 6 minimum).
+3. Pull whichever shards are reachable (need 5 of 7 for each version-2 chunk).
 4. Verify each returned shard's bytes hash to the requested hash before
    use — mismatch = reject and treat as unreachable.
-5. `erasure.Decode` to reconstruct ciphertext.
-6. AES-GCM decrypt with the manifest's key + nonce.
+5. `erasure.Decode` to reconstruct each ciphertext chunk.
+6. AES-GCM decrypt each chunk with the manifest key and its nonce.
 7. Write the reconstructed file back to disk in place of the stub (or
    open it directly).
 
@@ -138,7 +144,7 @@ Opening/double-clicking the stub triggers reconstruction:
 ### 5. Peer discovery / shard placement
 
 - Query Headscale/Tailscale for currently-online mesh peers.
-- Randomly select 6 peers from those online to receive the 6 shards of
+- Select 7 peers from those online to receive the 7 shards of
   a new file. Random selection is intentional for v1 — simplest option,
   revisit trust/preference logic later without changing the manifest
   format.

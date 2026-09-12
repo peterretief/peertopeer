@@ -1,0 +1,89 @@
+name: peertopeer-localmail
+
+x-peer: &peer
+  image: ${DSTORE_PEER_IMAGE:?Set DSTORE_PEER_IMAGE in .env.peers}
+  init: true
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  dns:
+    - 10.0.0.2
+    - 8.8.8.8
+  extra_hosts:
+    - "headscale.withcare.co.za:84.8.132.163"
+  environment: &peer-environment
+    TS_AUTHKEY: ${HEADSCALE_AUTHKEY:-}
+    TS_AUTH_ONCE: "true"
+    TS_USERSPACE: "false"
+    TS_ACCEPT_DNS: "false"
+    TS_EXTRA_ARGS: --login-server=${HEADSCALE_URL:?Set HEADSCALE_URL in .env.peers}
+    TS_STATE_DIR: /var/lib/tailscale
+    TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    DSTORE_MEMBERS: ${DSTORE_MEMBERS:?Set DSTORE_MEMBERS in .env.peers}
+    DSTORE_SHARE_ID: ${DSTORE_SHARE_ID:-personal}
+    DSTORE_QUOTA_BYTES: ${DSTORE_QUOTA_BYTES:-1073741824}
+    DSTORE_MAX_FILE_BYTES: ${DSTORE_MAX_FILE_BYTES:-67108864}
+  restart: unless-stopped
+  stop_grace_period: 15s
+  mem_limit: 384m
+  mem_reservation: 128m
+  cpus: 0.75
+  pids_limit: 128
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test: ["CMD", "dstore-peer-health"]
+    interval: 15s
+    timeout: 10s
+    retries: 3
+    start_period: 180s
+
+services:
+  peer-a:
+    <<: *peer
+    hostname: ${PEER_PREFIX:-dstore-localmail}-a
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-localmail}-a
+    volumes:
+      - ./peers/peer-a/tailscale:/var/lib/tailscale
+      - ./peers/peer-a/dstore:/var/lib/dstore
+    networks:
+      dstore-macvlan:
+        ipv4_address: 10.0.0.241
+
+  peer-b:
+    <<: *peer
+    hostname: ${PEER_PREFIX:-dstore-localmail}-b
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-localmail}-b
+    volumes:
+      - ./peers/peer-b/tailscale:/var/lib/tailscale
+      - ./peers/peer-b/dstore:/var/lib/dstore
+    networks:
+      dstore-macvlan:
+        ipv4_address: 10.0.0.242
+
+  peer-c:
+    <<: *peer
+    hostname: ${PEER_PREFIX:-dstore-localmail}-c
+    environment:
+      <<: *peer-environment
+      TS_HOSTNAME: ${PEER_PREFIX:-dstore-localmail}-c
+    volumes:
+      - ./peers/peer-c/tailscale:/var/lib/tailscale
+      - ./peers/peer-c/dstore:/var/lib/dstore
+    networks:
+      dstore-macvlan:
+        ipv4_address: 10.0.0.243
+
+networks:
+  dstore-macvlan:
+    external: true
+    name: dstore-localmail-macvlan

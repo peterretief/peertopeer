@@ -19,7 +19,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$ROOT_DIR
-ExecStart=$ROOT_DIR/bin/dstore agent -origin $ROOT_DIR/outfiles -shards $ROOT_DIR/.dstore-shards -addr :8080
+ExecStart=$ROOT_DIR/bin/dstore agent -origin $ROOT_DIR/outfiles -shards $ROOT_DIR/.dstore-shards -addr :8080 -chunk-size 16777216
 Restart=on-failure
 RestartSec=5
 

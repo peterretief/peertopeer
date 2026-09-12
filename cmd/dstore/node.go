@@ -39,6 +39,7 @@ func runInit(args []string) error {
 	fs.StringVar(&c.Peers, "peers", "", "explicit targets as name=host[:port]")
 	fs.Int64Var(&c.QuotaBytes, "quota-bytes", c.QuotaBytes, "maximum local ciphertext storage")
 	fs.Int64Var(&c.MaxFileBytes, "max-file-bytes", c.MaxFileBytes, "maximum file size")
+	fs.Int64Var(&c.ChunkSize, "chunk-size", c.ChunkSize, "plaintext chunk size")
 	fs.BoolVar(&c.AllowMesh, "allow-mesh", false, "allow any authenticated VPN device")
 	members := fs.String("members", "", "comma-separated allowed mesh identity names")
 	if err := fs.Parse(args); err != nil {
@@ -71,7 +72,7 @@ func configuredPipeline(c nodeconfig.Config) (dstore.Config, error) {
 	ports = mergePeerPorts(parsePeerPorts(c.PeerPorts), ports)
 	cfg := dstore.Config{OriginDir: c.OriginDir, ShardDir: c.ShardDir, ListenPort: c.Port,
 		PeerPorts: ports, Peers: peers, ShareID: c.ShareID, MinPeers: erasure.TotalShards,
-		RequireCapabilities: true, KeepOriginal: true, MaxFileBytes: c.MaxFileBytes, QuotaBytes: c.QuotaBytes}
+		RequireCapabilities: true, KeepOriginal: true, MaxFileBytes: c.MaxFileBytes, ChunkSize: c.ChunkSize, QuotaBytes: c.QuotaBytes}
 	if !c.AllowMesh {
 		cfg.Members = c.Members
 	}
